@@ -42,8 +42,9 @@ function saveState() {
   fs.writeFileSync(STATE_FILE, JSON.stringify(obj, null, 2));
 }
 
-// --- Telegram ---
-const bot = new TelegramBot(TELEGRAM_BOT_TOKEN);
+// --- Telegram (polling mode for commands) ---
+const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: true });
+let alertsEnabled = true;
 
 async function sendAlert(fdv, threshold, direction) {
   const fdvStr = formatM(fdv);
@@ -157,6 +158,44 @@ function checkThresholds(currentFDV) {
   return alerts;
 }
 
+// --- Bot commands ---
+bot.onText(/\/enable/, (msg) => {
+  if (String(msg.chat.id) !== TELEGRAM_CHAT_ID) return;
+  alertsEnabled = true;
+  bot.sendMessage(msg.chat.id, "Alerts *enabled*.", { parse_mode: "Markdown" });
+  console.log(`[${ts()}] Alerts enabled via /enable`);
+});
+
+bot.onText(/\/disable/, (msg) => {
+  if (String(msg.chat.id) !== TELEGRAM_CHAT_ID) return;
+  alertsEnabled = false;
+  bot.sendMessage(msg.chat.id, "Alerts *disabled*.", { parse_mode: "Markdown" });
+  console.log(`[${ts()}] Alerts disabled via /disable`);
+});
+
+bot.onText(/\/update/, async (msg) => {
+  if (String(msg.chat.id) !== TELEGRAM_CHAT_ID) return;
+  try {
+    const { fdv, price } = await getFDV();
+    const threshold = getThreshold(fdv);
+    const nextUp = formatM(threshold + STEP);
+    const nextDown = threshold > 0 ? formatM(threshold) : "N/A";
+    const status = alertsEnabled ? "ON" : "OFF";
+
+    const text =
+      `*$PRL Live Update*\n\n` +
+      `Price: *$${price.toFixed(6)}*\n` +
+      `FDV: *${formatM(fdv)}*\n\n` +
+      `Next alert up: *${nextUp}*\n` +
+      `Next alert down: *${nextDown}*\n` +
+      `Alerts: *${status}*`;
+
+    bot.sendMessage(msg.chat.id, text, { parse_mode: "Markdown" });
+  } catch (err) {
+    bot.sendMessage(msg.chat.id, `Error fetching price: ${err.message}`);
+  }
+});
+
 // --- Main loop ---
 async function poll() {
   try {
@@ -165,7 +204,7 @@ async function poll() {
 
     const alerts = checkThresholds(fdv);
 
-    if (alerts.length > 0) {
+    if (alerts.length > 0 && alertsEnabled) {
       saveState();
       for (const { threshold, direction } of alerts) {
         await sendAlert(fdv, threshold, direction);
