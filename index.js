@@ -1,5 +1,6 @@
 require("dotenv").config();
 const TelegramBot = require("node-telegram-bot-api");
+const http = require("http");
 const https = require("https");
 const fs = require("fs");
 const path = require("path");
@@ -174,6 +175,17 @@ async function poll() {
     console.error(`[${ts()}] Poll error:`, err.message);
   }
 }
+
+// --- Health server (keeps Render web service alive) ---
+const PORT = process.env.PORT || 3000;
+
+http.createServer((req, res) => {
+  const fdvStr = lastKnownFDV ? formatM(lastKnownFDV) : "pending...";
+  res.writeHead(200, { "Content-Type": "text/plain" });
+  res.end(`TG-Perle-Alert running | FDV: ${fdvStr}`);
+}).listen(PORT, () => {
+  console.log(`Health server on port ${PORT}`);
+});
 
 async function main() {
   console.log("=== TG-Perle-Alert ===");
