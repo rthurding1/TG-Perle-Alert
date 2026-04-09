@@ -10,7 +10,7 @@ const {
   TELEGRAM_BOT_TOKEN,
   TELEGRAM_CHAT_ID,
   COINGECKO_COIN_ID = "perle",
-  POLL_INTERVAL_SECONDS = "60",
+  POLL_INTERVAL_SECONDS = "120",
   COOLDOWN_HOURS = "4",
   THRESHOLD_STEP_M = "25",
 } = process.env;
@@ -74,7 +74,10 @@ function ts() {
   return new Date().toISOString();
 }
 
-// --- CoinGecko price fetching ---
+// --- CoinGecko price fetching (lightweight endpoint + cache) ---
+let priceCache = { fdv: 0, price: 0, updatedAt: 0 };
+const CACHE_TTL_MS = 30_000; // serve cached data if <30s old
+
 function fetchJSON(url) {
   return new Promise((resolve, reject) => {
     https
@@ -98,16 +101,27 @@ function fetchJSON(url) {
   });
 }
 
-async function getFDV() {
-  const url = `https://api.coingecko.com/api/v3/coins/${COINGECKO_COIN_ID}?localization=false&tickers=false&community_data=false&developer_data=false`;
-  const data = await fetchJSON(url);
-
-  const fdv = data?.market_data?.fully_diluted_valuation?.usd;
-  if (!fdv || fdv <= 0) {
-    throw new Error(`Invalid FDV from CoinGecko: ${fdv}`);
+async function getFDV(useCache = false) {
+  // Return cached data if fresh enough
+  if (useCache && priceCache.updatedAt && Date.now() - priceCache.updatedAt < CACHE_TTL_MS) {
+    return { fdv: priceCache.fdv, price: priceCache.price };
   }
 
-  const price = data?.market_data?.current_price?.usd || 0;
+  // Use /simple/price — much lighter than /coins/{id}, lower rate-limit cost
+  const url = `https://api.coingecko.com/api/v3/simple/price?ids=${COINGECKO_COIN_ID}&vs_currencies=usd&include_market_cap=true`;
+  const data = await fetchJSON(url);
+
+  const coinData = data?.[COINGECKO_COIN_ID];
+  if (!coinData) throw new Error(`No data for ${COINGECKO_COIN_ID}`);
+
+  const price = coinData.usd;
+  if (!price || price <= 0) throw new Error(`Invalid price: ${price}`);
+
+  // FDV = price * total supply (1B for PRL)
+  const TOTAL_SUPPLY = 1_000_000_000;
+  const fdv = price * TOTAL_SUPPLY;
+
+  priceCache = { fdv, price, updatedAt: Date.now() };
   return { fdv, price };
 }
 
@@ -176,7 +190,7 @@ bot.onText(/\/disable/, (msg) => {
 bot.onText(/\/update/, async (msg) => {
   if (String(msg.chat.id) !== TELEGRAM_CHAT_ID) return;
   try {
-    const { fdv, price } = await getFDV();
+    const { fdv, price } = await getFDV(true);
     const threshold = getThreshold(fdv);
     const nextUp = formatM(threshold + STEP);
     const nextDown = threshold > 0 ? formatM(threshold) : "N/A";
@@ -196,11 +210,14 @@ bot.onText(/\/update/, async (msg) => {
   }
 });
 
-// --- Main loop ---
+// --- Main loop with backoff ---
+let currentInterval = POLL_MS;
+
 async function poll() {
   try {
     const { fdv, price } = await getFDV();
     console.log(`[${ts()}] FDV: ${formatM(fdv)} | Price: $${price.toFixed(6)}`);
+    currentInterval = POLL_MS; // reset to normal on success
 
     const alerts = checkThresholds(fdv);
 
@@ -212,7 +229,16 @@ async function poll() {
     }
   } catch (err) {
     console.error(`[${ts()}] Poll error:`, err.message);
+    if (err.message.includes("rate limit")) {
+      currentInterval = Math.min(currentInterval * 2, 10 * 60 * 1000); // back off, max 10min
+      console.log(`[${ts()}] Backing off to ${currentInterval / 1000}s`);
+    }
   }
+  scheduleNext();
+}
+
+function scheduleNext() {
+  setTimeout(poll, currentInterval);
 }
 
 // --- Health server (keeps Render web service alive) ---
@@ -244,7 +270,6 @@ async function main() {
   console.log("");
 
   await poll();
-  setInterval(poll, POLL_MS);
 }
 
 main();
