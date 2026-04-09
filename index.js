@@ -178,6 +178,7 @@ async function poll() {
 
 // --- Health server (keeps Render web service alive) ---
 const PORT = process.env.PORT || 3000;
+const RENDER_URL = process.env.RENDER_EXTERNAL_URL;
 
 http.createServer((req, res) => {
   const fdvStr = lastKnownFDV ? formatM(lastKnownFDV) : "pending...";
@@ -186,6 +187,13 @@ http.createServer((req, res) => {
 }).listen(PORT, () => {
   console.log(`Health server on port ${PORT}`);
 });
+
+// Self-ping every 14 min to prevent Render free tier from sleeping
+if (RENDER_URL) {
+  setInterval(() => {
+    https.get(RENDER_URL, (res) => res.resume()).on("error", () => {});
+  }, 14 * 60 * 1000);
+}
 
 async function main() {
   console.log("=== TG-Perle-Alert ===");
