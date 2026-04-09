@@ -9,7 +9,7 @@ const path = require("path");
 const {
   TELEGRAM_BOT_TOKEN,
   TELEGRAM_CHAT_ID,
-  COINGECKO_COIN_ID = "perle",
+  PRL_PAIR_ADDRESS = "DYxp5fh3Eh7iDEVHv9bFLGnPwvXwFe5YWpGayJuzzbgd",
   POLL_INTERVAL_SECONDS = "120",
   COOLDOWN_HOURS = "4",
   THRESHOLD_STEP_M = "25",
@@ -74,16 +74,16 @@ function ts() {
   return new Date().toISOString();
 }
 
-// --- CoinGecko price fetching (lightweight endpoint + cache) ---
+// --- DexScreener price fetching (free, no rate limits) ---
 let priceCache = { fdv: 0, price: 0, updatedAt: 0 };
-const CACHE_TTL_MS = 30_000; // serve cached data if <30s old
+const CACHE_TTL_MS = 30_000;
 
 function fetchJSON(url) {
   return new Promise((resolve, reject) => {
     https
       .get(url, { headers: { "User-Agent": "TG-Perle-Alert/1.0" } }, (res) => {
         if (res.statusCode === 429) {
-          reject(new Error("CoinGecko rate limit hit — will retry next poll"));
+          reject(new Error("Rate limit hit — will retry next poll"));
           res.resume();
           return;
         }
@@ -102,24 +102,19 @@ function fetchJSON(url) {
 }
 
 async function getFDV(useCache = false) {
-  // Return cached data if fresh enough
   if (useCache && priceCache.updatedAt && Date.now() - priceCache.updatedAt < CACHE_TTL_MS) {
     return { fdv: priceCache.fdv, price: priceCache.price };
   }
 
-  // Use /simple/price — much lighter than /coins/{id}, lower rate-limit cost
-  const url = `https://api.coingecko.com/api/v3/simple/price?ids=${COINGECKO_COIN_ID}&vs_currencies=usd&include_market_cap=true`;
+  const url = `https://api.dexscreener.com/latest/dex/pairs/solana/${PRL_PAIR_ADDRESS}`;
   const data = await fetchJSON(url);
 
-  const coinData = data?.[COINGECKO_COIN_ID];
-  if (!coinData) throw new Error(`No data for ${COINGECKO_COIN_ID}`);
+  const pair = data?.pairs?.[0] || data?.pair;
+  if (!pair) throw new Error("Could not find $PRL pair on DexScreener");
 
-  const price = coinData.usd;
-  if (!price || price <= 0) throw new Error(`Invalid price: ${price}`);
-
-  // FDV = price * total supply (1B for PRL)
-  const TOTAL_SUPPLY = 1_000_000_000;
-  const fdv = price * TOTAL_SUPPLY;
+  const fdv = pair.fdv;
+  const price = Number(pair.priceUsd);
+  if (!fdv || fdv <= 0) throw new Error(`Invalid FDV: ${fdv}`);
 
   priceCache = { fdv, price, updatedAt: Date.now() };
   return { fdv, price };
@@ -267,12 +262,34 @@ http.createServer((req, res) => {
   }
 }).listen(PORT, () => {
   console.log(`Server on port ${PORT}`);
-  // Register webhook with Telegram
+  // Register webhook with Telegram (retry until it sticks)
   if (RENDER_URL) {
     const webhookUrl = `${RENDER_URL}${WEBHOOK_PATH}`;
-    fetchJSON(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook?url=${encodeURIComponent(webhookUrl)}`)
-      .then((r) => console.log(`Webhook set: ${r.ok ? "success" : r.description}`))
-      .catch((e) => console.error("Failed to set webhook:", e.message));
+    const setWebhook = () => {
+      const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook?url=${encodeURIComponent(webhookUrl)}`;
+      https.get(url, (res) => {
+        let data = "";
+        res.on("data", (c) => (data += c));
+        res.on("end", () => {
+          try {
+            const r = JSON.parse(data);
+            if (r.ok) {
+              console.log("Webhook set: success");
+            } else {
+              console.error("Webhook set failed:", r.description, "— retrying in 10s");
+              setTimeout(setWebhook, 10000);
+            }
+          } catch (e) {
+            console.error("Webhook response parse error — retrying in 10s");
+            setTimeout(setWebhook, 10000);
+          }
+        });
+      }).on("error", (e) => {
+        console.error("Webhook request failed:", e.message, "— retrying in 10s");
+        setTimeout(setWebhook, 10000);
+      });
+    };
+    setWebhook();
   }
 });
 
@@ -285,7 +302,7 @@ if (RENDER_URL) {
 
 async function main() {
   console.log("=== TG-Perle-Alert ===");
-  console.log(`CoinGecko coin: ${COINGECKO_COIN_ID}`);
+  console.log(`DexScreener pair: ${PRL_PAIR_ADDRESS}`);
   console.log(`Polling every ${POLL_INTERVAL_SECONDS}s`);
   console.log(`Threshold step: ${THRESHOLD_STEP_M}M`);
   console.log(`Cooldown: ${COOLDOWN_HOURS}h`);
