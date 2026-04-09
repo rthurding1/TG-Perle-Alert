@@ -75,8 +75,6 @@ function ts() {
 }
 
 // --- DexScreener price fetching (free, no rate limits) ---
-let priceCache = { fdv: 0, price: 0, updatedAt: 0 };
-const CACHE_TTL_MS = 30_000;
 
 function fetchJSON(url) {
   return new Promise((resolve, reject) => {
@@ -101,11 +99,7 @@ function fetchJSON(url) {
   });
 }
 
-async function getFDV(useCache = false) {
-  if (useCache && priceCache.updatedAt && Date.now() - priceCache.updatedAt < CACHE_TTL_MS) {
-    return { fdv: priceCache.fdv, price: priceCache.price };
-  }
-
+async function getFDV() {
   const url = `https://api.dexscreener.com/latest/dex/pairs/solana/${PRL_PAIR_ADDRESS}`;
   const data = await fetchJSON(url);
 
@@ -116,7 +110,6 @@ async function getFDV(useCache = false) {
   const price = Number(pair.priceUsd);
   if (!fdv || fdv <= 0) throw new Error(`Invalid FDV: ${fdv}`);
 
-  priceCache = { fdv, price, updatedAt: Date.now() };
   return { fdv, price };
 }
 
@@ -185,7 +178,7 @@ bot.onText(/\/disable/, (msg) => {
 bot.onText(/\/update/, async (msg) => {
   if (String(msg.chat.id) !== TELEGRAM_CHAT_ID) return;
   try {
-    const { fdv, price } = await getFDV(true);
+    const { fdv, price } = await getFDV();
     const threshold = getThreshold(fdv);
     const nextUp = formatM(threshold + STEP);
     const nextDown = threshold > 0 ? formatM(threshold) : "N/A";
