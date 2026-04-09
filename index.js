@@ -42,8 +42,8 @@ function saveState() {
   fs.writeFileSync(STATE_FILE, JSON.stringify(obj, null, 2));
 }
 
-// --- Telegram (polling mode for commands) ---
-const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: true });
+// --- Telegram (webhook mode for commands) ---
+const bot = new TelegramBot(TELEGRAM_BOT_TOKEN);
 let alertsEnabled = true;
 
 async function sendAlert(fdv, threshold, direction) {
@@ -241,16 +241,39 @@ function scheduleNext() {
   setTimeout(poll, currentInterval);
 }
 
-// --- Health server (keeps Render web service alive) ---
+// --- HTTP server (health + Telegram webhook) ---
 const PORT = process.env.PORT || 3000;
 const RENDER_URL = process.env.RENDER_EXTERNAL_URL;
+const WEBHOOK_PATH = `/webhook/${TELEGRAM_BOT_TOKEN}`;
 
 http.createServer((req, res) => {
-  const fdvStr = lastKnownFDV ? formatM(lastKnownFDV) : "pending...";
-  res.writeHead(200, { "Content-Type": "text/plain" });
-  res.end(`TG-Perle-Alert running | FDV: ${fdvStr}`);
+  if (req.method === "POST" && req.url === WEBHOOK_PATH) {
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
+      try {
+        const update = JSON.parse(body);
+        bot.processUpdate(update);
+      } catch (e) {
+        console.error("Webhook parse error:", e.message);
+      }
+      res.writeHead(200);
+      res.end("ok");
+    });
+  } else {
+    const fdvStr = lastKnownFDV ? formatM(lastKnownFDV) : "pending...";
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    res.end(`TG-Perle-Alert running | FDV: ${fdvStr}`);
+  }
 }).listen(PORT, () => {
-  console.log(`Health server on port ${PORT}`);
+  console.log(`Server on port ${PORT}`);
+  // Register webhook with Telegram
+  if (RENDER_URL) {
+    const webhookUrl = `${RENDER_URL}${WEBHOOK_PATH}`;
+    fetchJSON(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook?url=${encodeURIComponent(webhookUrl)}`)
+      .then((r) => console.log(`Webhook set: ${r.ok ? "success" : r.description}`))
+      .catch((e) => console.error("Failed to set webhook:", e.message));
+  }
 });
 
 // Self-ping every 14 min to prevent Render free tier from sleeping
