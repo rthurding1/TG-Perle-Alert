@@ -20,6 +20,7 @@ if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
   process.exit(1);
 }
 
+const VERSION = "1.0.0.7";
 const POLL_MS = Number(POLL_INTERVAL_SECONDS) * 1000;
 const COOLDOWN_MS = Number(COOLDOWN_HOURS) * 60 * 60 * 1000;
 const STEP = Number(THRESHOLD_STEP_M) * 1_000_000;
@@ -56,7 +57,8 @@ async function sendAlert(fdv, threshold, direction) {
     `${emoji} *$PRL FDV Alert*\n\n` +
     `FDV crossed *${arrow} ${threshStr}*\n` +
     `Current FDV: *${fdvStr}*\n\n` +
-    `_Cooldown: ${COOLDOWN_HOURS}h before re-alerting this level_`;
+    `_Cooldown: ${COOLDOWN_HOURS}h before re-alerting this level_\n\n` +
+    `_v${VERSION}_`;
 
   try {
     await bot.sendMessage(TELEGRAM_CHAT_ID, msg, { parse_mode: "Markdown" });
@@ -190,7 +192,8 @@ bot.onText(/\/update/, async (msg) => {
       `FDV: *${formatM(fdv)}*\n\n` +
       `Next alert up: *${nextUp}*\n` +
       `Next alert down: *${nextDown}*\n` +
-      `Alerts: *${status}*`;
+      `Alerts: *${status}*\n\n` +
+      `_v${VERSION}_`;
 
     bot.sendMessage(msg.chat.id, text, { parse_mode: "Markdown" });
   } catch (err) {
