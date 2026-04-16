@@ -32,7 +32,7 @@ let alertHistory = loadState();
 function loadState() {
   try {
     const data = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
-    return new Map(Object.entries(data).map(([k, v]) => [Number(k), v]));
+    return new Map(Object.entries(data));
   } catch {
     return new Map();
   }
@@ -127,9 +127,9 @@ function checkThresholds(currentFDV) {
   const currentThreshold = getThreshold(currentFDV);
 
   // Clean up expired cooldowns
-  for (const [threshold, timestamp] of alertHistory) {
+  for (const [key, timestamp] of alertHistory) {
     if (now - timestamp > COOLDOWN_MS) {
-      alertHistory.delete(threshold);
+      alertHistory.delete(key);
     }
   }
 
@@ -144,16 +144,18 @@ function checkThresholds(currentFDV) {
 
   if (currentThreshold > prevThreshold) {
     for (let t = prevThreshold + STEP; t <= currentThreshold; t += STEP) {
-      if (!alertHistory.has(t) || now - alertHistory.get(t) > COOLDOWN_MS) {
+      const key = `${t}:up`;
+      if (!alertHistory.has(key) || now - alertHistory.get(key) > COOLDOWN_MS) {
         alerts.push({ threshold: t, direction: "up" });
-        alertHistory.set(t, now);
+        alertHistory.set(key, now);
       }
     }
   } else if (currentThreshold < prevThreshold) {
     for (let t = prevThreshold; t > currentThreshold; t -= STEP) {
-      if (!alertHistory.has(t) || now - alertHistory.get(t) > COOLDOWN_MS) {
+      const key = `${t}:down`;
+      if (!alertHistory.has(key) || now - alertHistory.get(key) > COOLDOWN_MS) {
         alerts.push({ threshold: t, direction: "down" });
-        alertHistory.set(t, now);
+        alertHistory.set(key, now);
       }
     }
   }
