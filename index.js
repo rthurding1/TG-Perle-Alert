@@ -4,6 +4,13 @@ const http = require("http");
 const https = require("https");
 const fs = require("fs");
 const path = require("path");
+const {
+  parseTrackCommand,
+  addPriceTrack,
+  findTriggeredPriceTracks,
+  formatPriceTrackSetMessage,
+  formatPriceTrackTriggeredMessage,
+} = require("./track-alerts");
 
 // --- Config ---
 const {
@@ -21,26 +28,40 @@ if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
   process.exit(1);
 }
 
-const VERSION = "1.0.0.9";
+const VERSION = "1.0.1.0";
 const POLL_MS = Number(POLL_INTERVAL_SECONDS) * 1000;
 const COOLDOWN_MS = Number(COOLDOWN_HOURS) * 60 * 60 * 1000;
 const STEP = Number(THRESHOLD_STEP_M) * 1_000_000;
 
 // --- State (persisted to disk) ---
 const STATE_FILE = path.join(__dirname, "state.json");
-let alertHistory = loadState();
+const loadedState = loadState();
+let alertHistory = loadedState.alertHistory;
+let priceTracks = loadedState.priceTracks;
 
 function loadState() {
   try {
     const data = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
-    return new Map(Object.entries(data));
+
+    // Legacy state.json was a plain threshold-history object: { "25000000:up": 123 }
+    if (!data || Array.isArray(data) || !Object.prototype.hasOwnProperty.call(data, "alertHistory")) {
+      return { alertHistory: new Map(Object.entries(data || {})), priceTracks: [] };
+    }
+
+    return {
+      alertHistory: new Map(Object.entries(data.alertHistory || {})),
+      priceTracks: Array.isArray(data.priceTracks) ? data.priceTracks : [],
+    };
   } catch {
-    return new Map();
+    return { alertHistory: new Map(), priceTracks: [] };
   }
 }
 
 function saveState() {
-  const obj = Object.fromEntries(alertHistory);
+  const obj = {
+    alertHistory: Object.fromEntries(alertHistory),
+    priceTracks,
+  };
   fs.writeFileSync(STATE_FILE, JSON.stringify(obj, null, 2));
 }
 
@@ -210,6 +231,7 @@ function formatOpenInterest(oiRows) {
 
 // --- Threshold logic ---
 let lastKnownFDV = null;
+let lastKnownPrice = null;
 
 function getThreshold(fdv) {
   return Math.floor(fdv / STEP) * STEP;
@@ -272,6 +294,26 @@ bot.onText(/\/disable/, (msg) => {
   console.log(`[${ts()}] Alerts disabled via /disable`);
 });
 
+bot.onText(/\/track(?:\s+.+)?/, async (msg) => {
+  if (String(msg.chat.id) !== TELEGRAM_CHAT_ID) return;
+
+  const parsed = parseTrackCommand(msg.text);
+  if (!parsed.ok) {
+    bot.sendMessage(msg.chat.id, parsed.error);
+    return;
+  }
+
+  try {
+    const { price } = await getFDV();
+    const track = addPriceTrack(priceTracks, { targetPrice: parsed.targetPrice, currentPrice: price });
+    saveState();
+    bot.sendMessage(msg.chat.id, formatPriceTrackSetMessage(track, price, VERSION), { parse_mode: "Markdown" });
+    console.log(`[${ts()}] /track set: ${track.direction} $${track.targetPrice.toFixed(6)} from $${price.toFixed(6)}`);
+  } catch (err) {
+    bot.sendMessage(msg.chat.id, `Error setting price track: ${err.message}`);
+  }
+});
+
 bot.onText(/\/update/, async (msg) => {
   if (String(msg.chat.id) !== TELEGRAM_CHAT_ID) return;
   try {
@@ -306,6 +348,24 @@ async function poll() {
     const { fdv, price } = await getFDV();
     console.log(`[${ts()}] FDV: ${formatM(fdv)} | Price: $${price.toFixed(6)}`);
     currentInterval = POLL_MS; // reset to normal on success
+
+    if (priceTracks.length > 0) {
+      const { triggered, remaining } = findTriggeredPriceTracks(priceTracks, {
+        previousPrice: lastKnownPrice,
+        currentPrice: price,
+      });
+      if (triggered.length > 0) {
+        priceTracks = remaining;
+        saveState();
+        for (const track of triggered) {
+          await bot.sendMessage(TELEGRAM_CHAT_ID, formatPriceTrackTriggeredMessage(track, price, VERSION), {
+            parse_mode: "Markdown",
+          });
+          console.log(`[${ts()}] /track triggered: ${track.direction} $${track.targetPrice.toFixed(6)}`);
+        }
+      }
+    }
+    lastKnownPrice = price;
 
     const alerts = checkThresholds(fdv);
 

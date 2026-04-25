@@ -4,7 +4,8 @@
   "description": "Telegram bot that alerts when $PRL FDV crosses 25M thresholds",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "test": "node --test test-*.js"
   },
   "dependencies": {
     "dotenv": "^16.4.0",
