@@ -17,12 +17,13 @@ function parseTrackCommand(text) {
   return { ok: true, targetPrice };
 }
 
-function addPriceTrack(tracks, { targetPrice, currentPrice, now = Date.now() }) {
+function addPriceTrack(tracks, { targetPrice, currentPrice, chatId, now = Date.now() }) {
   const direction = targetPrice >= currentPrice ? "up" : "down";
   const track = {
     id: `${now}-${Math.random().toString(36).slice(2, 8)}`,
     targetPrice,
     direction,
+    chatId: chatId === undefined ? undefined : String(chatId),
     createdAt: now,
     startPrice: currentPrice,
   };

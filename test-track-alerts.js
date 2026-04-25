@@ -18,13 +18,15 @@ test('parseTrackCommand rejects missing or invalid prices', () => {
   assert.equal(parseTrackCommand('/track -0.1').ok, false);
 });
 
-test('addPriceTrack sets direction based on current price', () => {
+test('addPriceTrack sets direction and owner chat based on current price', () => {
   const tracks = [];
-  const up = addPriceTrack(tracks, { targetPrice: 0.25, currentPrice: 0.20, now: 1000 });
-  const down = addPriceTrack(tracks, { targetPrice: 0.15, currentPrice: 0.20, now: 2000 });
+  const up = addPriceTrack(tracks, { targetPrice: 0.25, currentPrice: 0.20, chatId: '8626366848', now: 1000 });
+  const down = addPriceTrack(tracks, { targetPrice: 0.15, currentPrice: 0.20, chatId: '5801106796', now: 2000 });
 
   assert.equal(up.direction, 'up');
+  assert.equal(up.chatId, '8626366848');
   assert.equal(down.direction, 'down');
+  assert.equal(down.chatId, '5801106796');
   assert.equal(tracks.length, 2);
 });
 

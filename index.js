@@ -11,11 +11,13 @@ const {
   formatPriceTrackSetMessage,
   formatPriceTrackTriggeredMessage,
 } = require("./track-alerts");
+const { parseAllowedTelegramIds, isAuthorizedTelegramMessage } = require("./telegram-auth");
 
 // --- Config ---
 const {
   TELEGRAM_BOT_TOKEN,
   TELEGRAM_CHAT_ID,
+  TELEGRAM_ALLOWED_USER_IDS = "8626366848",
   PRL_PAIR_ADDRESS = "DYxp5fh3Eh7iDEVHv9bFLGnPwvXwFe5YWpGayJuzzbgd",
   PRL_PERP_SYMBOL = "PRLUSDT",
   POLL_INTERVAL_SECONDS = "120",
@@ -28,7 +30,8 @@ if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
   process.exit(1);
 }
 
-const VERSION = "1.0.1.0";
+const VERSION = "1.0.1.1";
+const ALLOWED_TELEGRAM_IDS = parseAllowedTelegramIds(TELEGRAM_CHAT_ID, TELEGRAM_ALLOWED_USER_IDS);
 const POLL_MS = Number(POLL_INTERVAL_SECONDS) * 1000;
 const COOLDOWN_MS = Number(COOLDOWN_HOURS) * 60 * 60 * 1000;
 const STEP = Number(THRESHOLD_STEP_M) * 1_000_000;
@@ -68,6 +71,10 @@ function saveState() {
 // --- Telegram (webhook mode for commands) ---
 const bot = new TelegramBot(TELEGRAM_BOT_TOKEN);
 let alertsEnabled = true;
+
+function isAuthorized(msg) {
+  return isAuthorizedTelegramMessage(msg, ALLOWED_TELEGRAM_IDS);
+}
 
 async function sendAlert(fdv, threshold, direction, price) {
   const fdvStr = formatM(fdv);
@@ -281,21 +288,21 @@ function checkThresholds(currentFDV) {
 
 // --- Bot commands ---
 bot.onText(/\/enable/, (msg) => {
-  if (String(msg.chat.id) !== TELEGRAM_CHAT_ID) return;
+  if (!isAuthorized(msg)) return;
   alertsEnabled = true;
   bot.sendMessage(msg.chat.id, "Alerts *enabled*.", { parse_mode: "Markdown" });
   console.log(`[${ts()}] Alerts enabled via /enable`);
 });
 
 bot.onText(/\/disable/, (msg) => {
-  if (String(msg.chat.id) !== TELEGRAM_CHAT_ID) return;
+  if (!isAuthorized(msg)) return;
   alertsEnabled = false;
   bot.sendMessage(msg.chat.id, "Alerts *disabled*.", { parse_mode: "Markdown" });
   console.log(`[${ts()}] Alerts disabled via /disable`);
 });
 
 bot.onText(/\/track(?:\s+.+)?/, async (msg) => {
-  if (String(msg.chat.id) !== TELEGRAM_CHAT_ID) return;
+  if (!isAuthorized(msg)) return;
 
   const parsed = parseTrackCommand(msg.text);
   if (!parsed.ok) {
@@ -305,7 +312,11 @@ bot.onText(/\/track(?:\s+.+)?/, async (msg) => {
 
   try {
     const { price } = await getFDV();
-    const track = addPriceTrack(priceTracks, { targetPrice: parsed.targetPrice, currentPrice: price });
+    const track = addPriceTrack(priceTracks, {
+      targetPrice: parsed.targetPrice,
+      currentPrice: price,
+      chatId: msg.chat.id,
+    });
     saveState();
     bot.sendMessage(msg.chat.id, formatPriceTrackSetMessage(track, price, VERSION), { parse_mode: "Markdown" });
     console.log(`[${ts()}] /track set: ${track.direction} $${track.targetPrice.toFixed(6)} from $${price.toFixed(6)}`);
@@ -315,7 +326,7 @@ bot.onText(/\/track(?:\s+.+)?/, async (msg) => {
 });
 
 bot.onText(/\/update/, async (msg) => {
-  if (String(msg.chat.id) !== TELEGRAM_CHAT_ID) return;
+  if (!isAuthorized(msg)) return;
   try {
     const { fdv, price } = await getFDV();
     const oiRows = await getOpenInterest(price);
@@ -358,7 +369,7 @@ async function poll() {
         priceTracks = remaining;
         saveState();
         for (const track of triggered) {
-          await bot.sendMessage(TELEGRAM_CHAT_ID, formatPriceTrackTriggeredMessage(track, price, VERSION), {
+          await bot.sendMessage(track.chatId || TELEGRAM_CHAT_ID, formatPriceTrackTriggeredMessage(track, price, VERSION), {
             parse_mode: "Markdown",
           });
           console.log(`[${ts()}] /track triggered: ${track.direction} $${track.targetPrice.toFixed(6)}`);
@@ -460,6 +471,7 @@ async function main() {
   console.log(`Threshold step: ${THRESHOLD_STEP_M}M`);
   console.log(`Cooldown: ${COOLDOWN_HOURS}h`);
   console.log(`Chat ID: ${TELEGRAM_CHAT_ID}`);
+  console.log(`Allowed Telegram IDs: ${Array.from(ALLOWED_TELEGRAM_IDS).join(", ")}`);
   console.log("");
 
   await poll();
