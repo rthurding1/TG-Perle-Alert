@@ -21,7 +21,7 @@ if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
   process.exit(1);
 }
 
-const VERSION = "1.0.0.8";
+const VERSION = "1.0.0.9";
 const POLL_MS = Number(POLL_INTERVAL_SECONDS) * 1000;
 const COOLDOWN_MS = Number(COOLDOWN_HOURS) * 60 * 60 * 1000;
 const STEP = Number(THRESHOLD_STEP_M) * 1_000_000;
@@ -136,55 +136,73 @@ async function getFDV() {
   return { fdv, price };
 }
 
-async function fetchExchangeOpenInterest(exchange, price) {
+async function fetchCoinGeckoOpenInterest() {
   const symbol = PRL_PERP_SYMBOL.toUpperCase();
+  const data = await fetchJSON("https://api.coingecko.com/api/v3/derivatives?include_tickers=all");
+  if (!Array.isArray(data)) throw new Error("Invalid CoinGecko derivatives response");
 
-  if (exchange === "Binance") {
-    const data = await fetchJSON(`https://fapi.binance.com/fapi/v1/openInterest?symbol=${encodeURIComponent(symbol)}`);
-    const amount = Number(data?.openInterest);
-    if (!Number.isFinite(amount)) throw new Error("Invalid Binance OI response");
-    return { exchange, amount, notional: amount * price };
+  const marketMap = new Map([
+    ["Binance (Futures)", "Binance"],
+    ["Bybit (Futures)", "Bybit"],
+    ["Bitget Futures", "Bitget"],
+  ]);
+  const rows = new Map();
+
+  for (const item of data) {
+    const exchange = marketMap.get(item?.market);
+    const itemSymbol = String(item?.symbol || "").replace(/[^A-Z0-9]/gi, "").toUpperCase();
+    const openInterest = Number(item?.open_interest);
+    if (exchange && itemSymbol.includes(symbol) && Number.isFinite(openInterest)) {
+      rows.set(exchange, {
+        exchange,
+        notional: openInterest,
+        source: "CoinGecko",
+        updatedAt: item?.last_traded_at,
+      });
+    }
   }
 
-  if (exchange === "Bybit") {
-    const data = await fetchJSON(
-      `https://api.bybit.com/v5/market/open-interest?category=linear&symbol=${encodeURIComponent(symbol)}&intervalTime=5min`
-    );
-    const row = data?.result?.list?.[0];
-    const amount = Number(row?.openInterest);
-    if (data?.retCode !== 0 || !Number.isFinite(amount)) throw new Error(data?.retMsg || "Invalid Bybit OI response");
-    return { exchange, amount, notional: amount * price };
-  }
+  return rows;
+}
 
-  if (exchange === "Bitget") {
-    const data = await fetchJSON(
-      `https://api.bitget.com/api/v2/mix/market/open-interest?symbol=${encodeURIComponent(symbol)}&productType=USDT-FUTURES`
-    );
-    const row = data?.data?.openInterestList?.[0];
-    const amount = Number(row?.size);
-    if (data?.code !== "00000" || !Number.isFinite(amount)) throw new Error(data?.msg || "Invalid Bitget OI response");
-    return { exchange, amount, notional: amount * price };
-  }
-
-  throw new Error(`Unsupported exchange: ${exchange}`);
+async function fetchBitgetOpenInterest(price) {
+  const symbol = PRL_PERP_SYMBOL.toUpperCase();
+  const data = await fetchJSON(
+    `https://api.bitget.com/api/v2/mix/market/open-interest?symbol=${encodeURIComponent(symbol)}&productType=USDT-FUTURES`
+  );
+  const row = data?.data?.openInterestList?.[0];
+  const amount = Number(row?.size);
+  if (data?.code !== "00000" || !Number.isFinite(amount)) throw new Error(data?.msg || "Invalid Bitget OI response");
+  return { exchange: "Bitget", amount, notional: amount * price, source: "Bitget" };
 }
 
 async function getOpenInterest(price) {
   const exchanges = ["Binance", "Bybit", "Bitget"];
-  const settled = await Promise.allSettled(exchanges.map((exchange) => fetchExchangeOpenInterest(exchange, price)));
+  let coingeckoRows = new Map();
 
-  return settled.map((result, index) => {
-    if (result.status === "fulfilled") return result.value;
-    const exchange = exchanges[index];
-    console.error(`[${ts()}] ${exchange} OI error:`, result.reason?.message || result.reason);
-    return { exchange, error: result.reason?.message || "unavailable" };
+  try {
+    coingeckoRows = await fetchCoinGeckoOpenInterest();
+  } catch (err) {
+    console.error(`[${ts()}] CoinGecko OI error:`, err.message || err);
+  }
+
+  const bitgetDirect = await fetchBitgetOpenInterest(price).catch((err) => {
+    console.error(`[${ts()}] Bitget OI error:`, err.message || err);
+    return null;
+  });
+
+  return exchanges.map((exchange) => {
+    if (exchange === "Bitget" && bitgetDirect) return bitgetDirect;
+    if (coingeckoRows.has(exchange)) return coingeckoRows.get(exchange);
+    return { exchange, error: "unavailable" };
   });
 }
 
 function formatOpenInterest(oiRows) {
   const lines = oiRows.map((row) => {
     if (row.error) return `${row.exchange}: N/A`;
-    return `${row.exchange}: ${formatCompact(row.amount)} PRL (${formatCompact(row.notional, "$")})`;
+    if (Number.isFinite(row.amount)) return `${row.exchange}: ${formatCompact(row.amount)} PRL (${formatCompact(row.notional, "$")})`;
+    return `${row.exchange}: ${formatCompact(row.notional, "$")} (${row.source})`;
   });
 
   return `*Open Interest*\n${lines.join("\n")}`;
