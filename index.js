@@ -21,7 +21,7 @@ if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
   process.exit(1);
 }
 
-const VERSION = "1.0.0.7";
+const VERSION = "1.0.0.8";
 const POLL_MS = Number(POLL_INTERVAL_SECONDS) * 1000;
 const COOLDOWN_MS = Number(COOLDOWN_HOURS) * 60 * 60 * 1000;
 const STEP = Number(THRESHOLD_STEP_M) * 1_000_000;
