@@ -12,6 +12,7 @@ const {
   formatPriceTrackTriggeredMessage,
 } = require("./track-alerts");
 const { parseAllowedTelegramIds, isAuthorizedTelegramMessage } = require("./telegram-auth");
+const { formatOpenInterest } = require("./open-interest");
 
 // --- Config ---
 const {
@@ -30,7 +31,7 @@ if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
   process.exit(1);
 }
 
-const VERSION = "1.0.1.1";
+const VERSION = "1.0.1.2";
 const ALLOWED_TELEGRAM_IDS = parseAllowedTelegramIds(TELEGRAM_CHAT_ID, TELEGRAM_ALLOWED_USER_IDS);
 const POLL_MS = Number(POLL_INTERVAL_SECONDS) * 1000;
 const COOLDOWN_MS = Number(COOLDOWN_HOURS) * 60 * 60 * 1000;
@@ -102,16 +103,6 @@ async function sendAlert(fdv, threshold, direction, price) {
 
 function formatM(value) {
   return `$${(value / 1_000_000).toFixed(2)}M`;
-}
-
-function formatCompact(value, prefix = "") {
-  if (value === null || value === undefined || !Number.isFinite(Number(value))) return "N/A";
-  const n = Number(value);
-  const abs = Math.abs(n);
-  if (abs >= 1_000_000_000) return `${prefix}${(n / 1_000_000_000).toFixed(2)}B`;
-  if (abs >= 1_000_000) return `${prefix}${(n / 1_000_000).toFixed(2)}M`;
-  if (abs >= 1_000) return `${prefix}${(n / 1_000).toFixed(2)}K`;
-  return `${prefix}${n.toFixed(2)}`;
 }
 
 function ts() {
@@ -224,16 +215,6 @@ async function getOpenInterest(price) {
     if (coingeckoRows.has(exchange)) return coingeckoRows.get(exchange);
     return { exchange, error: "unavailable" };
   });
-}
-
-function formatOpenInterest(oiRows) {
-  const lines = oiRows.map((row) => {
-    if (row.error) return `${row.exchange}: N/A`;
-    if (Number.isFinite(row.amount)) return `${row.exchange}: ${formatCompact(row.amount)} PRL (${formatCompact(row.notional, "$")})`;
-    return `${row.exchange}: ${formatCompact(row.notional, "$")} (${row.source})`;
-  });
-
-  return `*Open Interest*\n${lines.join("\n")}`;
 }
 
 // --- Threshold logic ---
