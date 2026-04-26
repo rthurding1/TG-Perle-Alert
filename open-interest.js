@@ -72,8 +72,19 @@ function mergeOpenInterestRowsWithCache({ exchanges, freshRows, cache, now = Dat
   });
 }
 
+function hasFreshOpenInterestCache({ exchanges, cache, maxAgeMs, now = Date.now() }) {
+  return exchanges.every((exchange) => {
+    const cachedRow = cache.get(exchange);
+    if (!cachedRow) return false;
+
+    const updatedAt = toTimestamp(cachedRow.updatedAt, NaN);
+    return Number.isFinite(updatedAt) && now - updatedAt <= maxAgeMs;
+  });
+}
+
 module.exports = {
   formatCompact,
   formatOpenInterest,
   mergeOpenInterestRowsWithCache,
+  hasFreshOpenInterestCache,
 };

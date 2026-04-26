@@ -87,3 +87,16 @@ test('mergeOpenInterestRowsWithCache updates cache with fresh rows', () => {
     updatedAt: 1_700_000_000_000,
   });
 });
+
+test('hasFreshOpenInterestCache returns true only when every exchange is cached and fresh', () => {
+  const { hasFreshOpenInterestCache } = require('./open-interest');
+  const now = 1_700_000_000_000;
+  const cache = new Map([
+    ['Binance', { exchange: 'Binance', notional: 2_000_000, source: 'CoinGecko', updatedAt: now - 60_000 }],
+    ['Bybit', { exchange: 'Bybit', notional: 1_000_000, source: 'CoinGecko', updatedAt: now - 9 * 60_000 }],
+  ]);
+
+  assert.equal(hasFreshOpenInterestCache({ exchanges: ['Binance', 'Bybit'], cache, maxAgeMs: 10 * 60_000, now }), true);
+  assert.equal(hasFreshOpenInterestCache({ exchanges: ['Binance', 'Bybit'], cache, maxAgeMs: 5 * 60_000, now }), false);
+  assert.equal(hasFreshOpenInterestCache({ exchanges: ['Binance', 'Bybit', 'Bitget'], cache, maxAgeMs: 10 * 60_000, now }), false);
+});

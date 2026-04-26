@@ -12,7 +12,7 @@ const {
   formatPriceTrackTriggeredMessage,
 } = require("./track-alerts");
 const { parseAllowedTelegramIds, isAuthorizedTelegramMessage } = require("./telegram-auth");
-const { formatOpenInterest, mergeOpenInterestRowsWithCache } = require("./open-interest");
+const { formatOpenInterest, mergeOpenInterestRowsWithCache, hasFreshOpenInterestCache } = require("./open-interest");
 
 // --- Config ---
 const {
@@ -36,6 +36,7 @@ const ALLOWED_TELEGRAM_IDS = parseAllowedTelegramIds(TELEGRAM_CHAT_ID, TELEGRAM_
 const POLL_MS = Number(POLL_INTERVAL_SECONDS) * 1000;
 const COOLDOWN_MS = Number(COOLDOWN_HOURS) * 60 * 60 * 1000;
 const STEP = Number(THRESHOLD_STEP_M) * 1_000_000;
+const OPEN_INTEREST_CACHE_MAX_AGE_MS = 10 * 60 * 1000;
 
 // --- State (persisted to disk) ---
 const STATE_FILE = path.join(__dirname, "state.json");
@@ -202,10 +203,18 @@ async function getOpenInterest(price) {
   const coingeckoExchanges = ["Binance", "Bybit"];
   let coingeckoRows = new Map();
 
-  try {
-    coingeckoRows = await fetchCoinGeckoOpenInterest();
-  } catch (err) {
-    console.error(`[${ts()}] CoinGecko OI error:`, err.message || err);
+  const cacheIsFresh = hasFreshOpenInterestCache({
+    exchanges: coingeckoExchanges,
+    cache: openInterestCache,
+    maxAgeMs: OPEN_INTEREST_CACHE_MAX_AGE_MS,
+  });
+
+  if (!cacheIsFresh) {
+    try {
+      coingeckoRows = await fetchCoinGeckoOpenInterest();
+    } catch (err) {
+      console.error(`[${ts()}] CoinGecko OI error:`, err.message || err);
+    }
   }
 
   const binanceBybitRows = mergeOpenInterestRowsWithCache({
