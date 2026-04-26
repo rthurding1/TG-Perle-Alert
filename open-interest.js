@@ -8,7 +8,20 @@ function formatCompact(value, prefix = "") {
   return `${prefix}${n.toFixed(2)}`;
 }
 
-function formatOpenInterest(oiRows) {
+function formatCacheAge(cachedAt, now = Date.now()) {
+  const ageMs = Math.max(0, Number(now) - Number(cachedAt));
+  const ageMinutes = Math.floor(ageMs / 60_000);
+  if (ageMinutes < 1) return "<1m ago";
+  if (ageMinutes < 60) return `${ageMinutes}m ago`;
+
+  const ageHours = Math.floor(ageMinutes / 60);
+  if (ageHours < 24) return `${ageHours}h ago`;
+
+  const ageDays = Math.floor(ageHours / 24);
+  return `${ageDays}d ago`;
+}
+
+function formatOpenInterest(oiRows, { now = Date.now() } = {}) {
   const total = oiRows.reduce((sum, row) => {
     const notional = Number(row?.notional);
     return Number.isFinite(notional) && !row.error ? sum + notional : sum;
@@ -21,13 +34,46 @@ function formatOpenInterest(oiRows) {
       lines.push(`${row.exchange}: N/A`);
       continue;
     }
-    lines.push(`${row.exchange}: ${formatCompact(row.notional, "$")} (${row.source})`);
+
+    const source = row.cachedAt
+      ? `${row.source}, cached ${formatCacheAge(row.cachedAt, now)}`
+      : row.source;
+    lines.push(`${row.exchange}: ${formatCompact(row.notional, "$")} (${source})`);
   }
 
   return `*Open Interest*\n${lines.join("\n")}`;
 }
 
+function toTimestamp(value, fallback) {
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) return numeric;
+
+  const parsed = Date.parse(value);
+  if (Number.isFinite(parsed)) return parsed;
+
+  return fallback;
+}
+
+function mergeOpenInterestRowsWithCache({ exchanges, freshRows, cache, now = Date.now() }) {
+  return exchanges.map((exchange) => {
+    const freshRow = freshRows.get(exchange);
+    if (freshRow) {
+      const cacheRow = { ...freshRow, updatedAt: toTimestamp(freshRow.updatedAt, now) };
+      cache.set(exchange, cacheRow);
+      return freshRow;
+    }
+
+    const cachedRow = cache.get(exchange);
+    if (cachedRow) {
+      return { ...cachedRow, cachedAt: toTimestamp(cachedRow.updatedAt, now) };
+    }
+
+    return { exchange, error: "unavailable" };
+  });
+}
+
 module.exports = {
   formatCompact,
   formatOpenInterest,
+  mergeOpenInterestRowsWithCache,
 };

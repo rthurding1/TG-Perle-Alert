@@ -12,7 +12,7 @@ const {
   formatPriceTrackTriggeredMessage,
 } = require("./track-alerts");
 const { parseAllowedTelegramIds, isAuthorizedTelegramMessage } = require("./telegram-auth");
-const { formatOpenInterest } = require("./open-interest");
+const { formatOpenInterest, mergeOpenInterestRowsWithCache } = require("./open-interest");
 
 // --- Config ---
 const {
@@ -31,7 +31,7 @@ if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
   process.exit(1);
 }
 
-const VERSION = "1.0.1.2";
+const VERSION = "1.0.1.3";
 const ALLOWED_TELEGRAM_IDS = parseAllowedTelegramIds(TELEGRAM_CHAT_ID, TELEGRAM_ALLOWED_USER_IDS);
 const POLL_MS = Number(POLL_INTERVAL_SECONDS) * 1000;
 const COOLDOWN_MS = Number(COOLDOWN_HOURS) * 60 * 60 * 1000;
@@ -42,6 +42,7 @@ const STATE_FILE = path.join(__dirname, "state.json");
 const loadedState = loadState();
 let alertHistory = loadedState.alertHistory;
 let priceTracks = loadedState.priceTracks;
+let openInterestCache = loadedState.openInterestCache;
 
 function loadState() {
   try {
@@ -49,15 +50,16 @@ function loadState() {
 
     // Legacy state.json was a plain threshold-history object: { "25000000:up": 123 }
     if (!data || Array.isArray(data) || !Object.prototype.hasOwnProperty.call(data, "alertHistory")) {
-      return { alertHistory: new Map(Object.entries(data || {})), priceTracks: [] };
+      return { alertHistory: new Map(Object.entries(data || {})), priceTracks: [], openInterestCache: new Map() };
     }
 
     return {
       alertHistory: new Map(Object.entries(data.alertHistory || {})),
       priceTracks: Array.isArray(data.priceTracks) ? data.priceTracks : [],
+      openInterestCache: new Map(Object.entries(data.openInterestCache || {})),
     };
   } catch {
-    return { alertHistory: new Map(), priceTracks: [] };
+    return { alertHistory: new Map(), priceTracks: [], openInterestCache: new Map() };
   }
 }
 
@@ -65,6 +67,7 @@ function saveState() {
   const obj = {
     alertHistory: Object.fromEntries(alertHistory),
     priceTracks,
+    openInterestCache: Object.fromEntries(openInterestCache),
   };
   fs.writeFileSync(STATE_FILE, JSON.stringify(obj, null, 2));
 }
@@ -196,7 +199,7 @@ async function fetchBitgetOpenInterest(price) {
 }
 
 async function getOpenInterest(price) {
-  const exchanges = ["Binance", "Bybit", "Bitget"];
+  const coingeckoExchanges = ["Binance", "Bybit"];
   let coingeckoRows = new Map();
 
   try {
@@ -205,16 +208,22 @@ async function getOpenInterest(price) {
     console.error(`[${ts()}] CoinGecko OI error:`, err.message || err);
   }
 
+  const binanceBybitRows = mergeOpenInterestRowsWithCache({
+    exchanges: coingeckoExchanges,
+    freshRows: coingeckoRows,
+    cache: openInterestCache,
+  });
+
+  if (coingeckoRows.size > 0) {
+    saveState();
+  }
+
   const bitgetDirect = await fetchBitgetOpenInterest(price).catch((err) => {
     console.error(`[${ts()}] Bitget OI error:`, err.message || err);
     return null;
   });
 
-  return exchanges.map((exchange) => {
-    if (exchange === "Bitget" && bitgetDirect) return bitgetDirect;
-    if (coingeckoRows.has(exchange)) return coingeckoRows.get(exchange);
-    return { exchange, error: "unavailable" };
-  });
+  return [...binanceBybitRows, bitgetDirect || { exchange: "Bitget", error: "unavailable" }];
 }
 
 // --- Threshold logic ---
